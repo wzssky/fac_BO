@@ -9,86 +9,66 @@ graph TD
     classDef outputData fill:#fef08a,stroke:#eab308,stroke-width:2px,color:black;
 
     %% --- 配置层 ---
-    subgraph Configuration["配置层 (Driver)"]
-        ConfigYAML[/"config.yaml\n(定义21D变量, 1D保真度,\n边界/默认值, 分组策略,\n制造/几何硬约束)"/]:::config
+    subgraph Configuration ["配置层 (Driver)"]
+        ConfigYAML[/"config.yaml <br/> (21D变量, 1D保真度, <br/> 边界/分组/硬约束)"/]:::config
     end
 
     %% --- 主控层 ---
-    subgraph MainControl["主控层 (Orchestrator)"]
-        MainPY("main.py\n(迭代调度, Sobol初始化,\n保真度选择/分组轮换,\n超体积统计, 可中断恢复)"):::mainController
+    subgraph MainControl ["主控层 (Orchestrator)"]
+        MainPY("main.py <br/> (迭代调度, Sobol初始化, <br/> 保真度选择, 可中断恢复)"):::mainController
     end
 
     %% --- 几何层 ---
-    subgraph GeometryLayer["几何层 (Constraint Handler)"]
-        GeometryPY("geometry.py\n(参数空间映射, 约束校验,\n约束感知采样)"):::geometryLayer
-        Constraints{"五类约束校验\n(结构平滑性,\n模式匹配,\n可制造性等)"}:::geometryLayer
+    subgraph GeometryLayer ["几何层 (Constraint Handler)"]
+        GeometryPY("geometry.py <br/> (参数空间映射, 约束校验, <br/> 约束感知采样)"):::geometryLayer
+        Constraints{"五类约束校验 <br/> (结构平滑性, <br/> 模式匹配, <br/> 可制造性)"}:::geometryLayer
     end
 
     %% --- 优化层 ---
-    subgraph OptimizationLayer["优化层 (The Brain)"]
-        OptimizerPY("optimizer.py\n(分组坐标式\n多目标贝叶斯优化)"):::optimizationLayer
-        GPModel[/"代理模型 (GP)\n(SingleTaskGP / \nSingleTaskMultiFidelityGP)\n拟合双目标响应"/]:::optimizationLayer
-        AcqFunc{"采集函数 (EHVI)\n(多保真模式下引入\n成本加权权衡)"}:::optimizationLayer
+    subgraph OptimizationLayer ["优化层 (The Brain)"]
+        OptimizerPY("optimizer.py <br/> (分组坐标式 <br/> 多目标贝叶斯优化)"):::optimizationLayer
+        GPModel[/"代理模型 (GP) <br/> (SingleTaskGP / <br/> MultiFidelityGP)"/]:::optimizationLayer
+        AcqFunc{"采集函数 (EHVI) <br/> (多保真成本加权权衡)"}:::optimizationLayer
     end
 
     %% --- 评估层 ---
-    subgraph EvaluationLayer["评估层 (Simulator Pipeline)"]
-        LumFDTD("lum_fdtd.py\n(流水线构建器)"):::evaluationLayer
+    subgraph EvaluationLayer ["评估层 (Simulator Pipeline)"]
+        LumFDTD("lum_fdtd.py <br/> (评估流水线)"):::evaluationLayer
         
-        subgraph Pipeline ["评估流水线"]
+        subgraph Pipeline ["评估流水线细节"]
             GDSGen["GDS 生成"]:::evaluationLayer
-            LithoSim["DUV光刻/工艺近似\n(调用 fac)"]:::externalTool
-            FDTDSim["3D FDTD 电磁仿真\n(Lumerical lumapi)\n(高/低精度网格 .fsp)"]:::externalTool
-            MetricCalc["指标提取与计算\n(双偏振透射/串扰)"]:::evaluationLayer
+            LithoSim["DUV光刻/工艺近似 <br/> (调用 fac)"]:::externalTool
+            FDTDSim["3D FDTD 仿真 <br/> (Lumerical lumapi)"]:::externalTool
+            MetricCalc["指标提取与计算"]:::evaluationLayer
         end
         
-        Objectives[/"多目标 (越大越优)\nFOM1 = TTE→3 + TTM→2\nFOM2 = -(TTE→2 + TTM→3)"/]:::evaluationLayer
+        Objectives[/"多目标 (越大越优) <br/> FOM1 = TTE→3 + TTM→2 <br/> FOM2 = -(TTE→2 + TTM→3)"/]:::evaluationLayer
     end
 
     %% --- 输出数据 ---
-    subgraph Outputs["输出数据"]
+    subgraph Outputs ["输出数据"]
         JSONLogs[/"JSONL 过程日志"/]:::outputData
         Checkpoints[/"NPZ 检查点/摘要"/]:::outputData
     end
 
-    %% --- 核心流程连接 ---
-
-    %% 1. 配置加载
-    ConfigYAML ==>|读取定义与约束| MainPY
-
-    %% 2. 初始化与循环
-    MainPY -.->|1. Sobol初始化/采样请求| GeometryPY
-    GeometryPY -.->|返回可行初始解| MainPY
-    
-    %% 循环主体
-    MainPY ==>"2. 迭代调度循环 (Start Loop)"==> OptimizerPY
-    
-    %% 优化层内部
-    OptimizerPY -->|利用| GPModel
-    GPModel -->|提供预测与不确定性| AcqFunc
-    AcqFunc -->|推荐候选解| OptimizerPY
-    
-    %% 校验候选解
-    OptimizerPY --"3. 候选解校验请求"--> GeometryPY
-    GeometryPY --"执行五类约束校验"--> Constraints
-    Constraints --"返回校验结果 (可行性)"--> GeometryPY
-    GeometryPY --"返回经过校验的候选参数"--> MainPY
-
-    %% 评估流程
-    MainPY ==>"4. 发送参数与保真度指令"==> LumFDTD
-    LumFDTD -->|参数→版图| GDSGen
-    GDSGen -->|调用| LithoSim
-    LithoSim -->|制造感知版图| FDTDSim
-    FDTDSim -->|仿真结果提取| MetricCalc
-    MetricCalc -->|计算| Objectives
-    Objectives ==>"5. 返回 FOM1, FOM2"==> MainPY
-
-    %% 更新模型
-    MainPY --"6. 更新观测数据 (Tell)"--> OptimizerPY
-    OptimizerPY -->|重新拟合| GPModel
-
-    %% 日志记录
-    MainPY --"实时记录/周期性保存"--> JSONLogs & Checkpoints
-
-    %% 样式调整连接线
-    style MainControl fill:none,stroke:none
+    %% --- 流程连接 ---
+    ConfigYAML ==> MainPY
+    MainPY -.-> GeometryPY
+    GeometryPY -.-> MainPY
+    MainPY ==> OptimizerPY
+    OptimizerPY --> GPModel
+    GPModel --> AcqFunc
+    AcqFunc --> OptimizerPY
+    OptimizerPY -- "校验请求" --> GeometryPY
+    GeometryPY -- "执行校验" --> Constraints
+    Constraints -- "返回结果" --> GeometryPY
+    GeometryPY ==> MainPY
+    MainPY ==> LumFDTD
+    LumFDTD --> GDSGen
+    GDSGen --> LithoSim
+    LithoSim --> FDTDSim
+    FDTDSim --> MetricCalc
+    MetricCalc --> Objectives
+    Objectives ==> MainPY
+    MainPY -- "更新 (Tell)" --> OptimizerPY
+    MainPY -- "持久化" --> JSONLogs & Checkpoints
